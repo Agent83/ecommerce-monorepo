@@ -3,8 +3,23 @@ services:
     image: rabbitmq:3-management
     container_name: rabbitmq
     ports:
-      - "5672:5672"   # RabbitMQ main port
-      - "15672:15672" # Management console
+      - "5672:5672"
+      - "15672:15672"
+
+  userservice:
+    build:
+      context: ../  # Path to the UserService Dockerfile
+      dockerfile: ./Services/UserService/Dockerfile
+    container_name: userservice
+    depends_on:
+      - rabbitmq
+    ports:
+      - "5000:8080"
+    networks:
+      - ecommerce-network
     environment:
-      - RABBITMQ_DEFAULT_USER=guest
-      - RABBITMQ_DEFAULT_PASS=guest
+      - JWT_SECRET_KEY="YourSuper32CharacterLongerSecretKey!"
+
+networks:
+  ecommerce-network:
+    driver: bridge

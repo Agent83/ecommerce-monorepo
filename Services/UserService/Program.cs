@@ -1,59 +1,62 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.Extensions.Options;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
-using RabbitMQ.Client;
 using System.Text;
+using UserService.Data;
+using UserService.EventsBus;
+using UserService.Interface;
+using UserService.Models;
+using UserService.Seed;
 
 var builder = WebApplication.CreateBuilder(args);
 
-//Add services to the container
+// Add services to the container
 builder.Services.AddControllers();
 
-//Configure JWT Auth
+// Configure MSSQL Server and Entity Framework
+builder.Services.AddDbContext<UserDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+// Add ASP.NET Identity
+builder.Services.AddIdentity<User, IdentityRole>()
+    .AddEntityFrameworkStores<UserDbContext>()
+    .AddDefaultTokenProviders();
+
+builder.Services.AddScoped<IJwtTokenService, IJwtTokenService>();
+builder.Services.AddSingleton<IMessagePublisher, MessagePublisher>();
+
+// Retrieve the secret key from environment variables
+var secretKey = builder.Configuration["JWT_SECRET_KEY"]
+    ??Environment.GetEnvironmentVariable("JWT_SECRET_KEY")
+    ?? throw new InvalidOperationException("JWT secret key is missing");
+
+// Configure JWT authentication
+var key = Encoding.ASCII.GetBytes(secretKey);
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
         options.TokenValidationParameters = new TokenValidationParameters
         {
-            ValidateIssuer = true,
-            ValidateAudience = true,
-            ValidateLifetime = true,
             ValidateIssuerSigningKey = true,
-            ValidIssuer = "yourIssuer",
-            ValidAudience = "yourAudience",
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes("YourSecretKey"))
+            IssuerSigningKey = new SymmetricSecurityKey(key),
+            ValidateIssuer = false,
+            ValidateAudience = false,
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.Zero  // Optional: Adjust token expiration validation tolerance
         };
     });
 
 var app = builder.Build();
 
-app.MapGet("/send", () =>
+// Seed roles during startup
+using (var scope = app.Services.CreateScope())
 {
-    var factory = new ConnectionFactory() { HostName = "rabbitmq" };
-    using var connection = factory.CreateConnection();
-    using var channel = connection.CreateModel();
+    var services = scope.ServiceProvider;
+    await SeedRoles.InitializeAsync(services);
+}
 
-    channel.QueueDeclare(queue: "user_queue",
-                         durable: false,
-                         exclusive: false,
-                         autoDelete: false,
-                         arguments: null);
-
-    string message = "User registered!";
-    var body = Encoding.UTF8.GetBytes(message);
-
-    channel.BasicPublish(exchange: "",
-                         routingKey: "user_queue",
-                         basicProperties: null,
-                         body: body);
-
-    return "Message Sent to RabbitMQ!";
-});
-
-
-
-
-// use authentication and authorization
+// Use authentication and authorization
 app.UseAuthentication();
 app.UseAuthorization();
 
